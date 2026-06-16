@@ -69,14 +69,24 @@ resize();
 const K = {};
 window.addEventListener('keydown', e => {
   K[e.code] = true;
-  if ((e.code === 'Space' || e.code === 'Enter') && STATE === 'menu') doStart();
+  if ((e.code === 'Space' || e.code === 'Enter') && (STATE === 'menu' || STATE === 'dead')) doStart();
 });
 window.addEventListener('keyup', e => { K[e.code] = false; });
 
 let touchX = null;
-canvas.addEventListener('touchstart', e => { e.preventDefault(); touchX = e.touches[0].clientX; }, { passive: false });
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (STATE === 'dead') { doStart(); return; }
+  touchX = e.touches[0].clientX;
+}, { passive: false });
 canvas.addEventListener('touchmove',  e => { e.preventDefault(); touchX = e.touches[0].clientX; }, { passive: false });
 canvas.addEventListener('touchend',   e => { e.preventDefault(); touchX = null; }, { passive: false });
+canvas.addEventListener('mousedown', e => {
+  if (STATE === 'dead') {
+    e.preventDefault();
+    doStart();
+  }
+});
 
 // ── GAME STATE ────────────────────────────────────────────────────────────
 let STATE = 'menu'; // menu | running | dead
@@ -149,11 +159,21 @@ function doDie() {
       <div style="font-size:56px;font-weight:900;color:#fff;text-shadow:0 0 20px #f60;line-height:1">${Math.floor(score)}</div>
       <div style="font-size:11px;color:#888;letter-spacing:2px">POINTS</div>
       <div style="width:160px;height:1px;background:linear-gradient(to right,transparent,#f60,transparent)"></div>
-      <div style="font-size:12px;color:#fa8">Challenge your friend to beat this!</div>
+      <div style="font-size:12px;color:#fa8;text-align:center;line-height:1.6">Tap restart to launch again.</div>
+      <button onclick="doStart()" style="
+        pointer-events:all;
+        width:210px;padding:16px 0;
+        background:linear-gradient(180deg,#ff8a35 0%,#c73600 100%);
+        border:none;border-radius:10px;color:#fff;
+        font-size:18px;font-weight:900;font-family:monospace;
+        letter-spacing:3px;cursor:pointer;
+        box-shadow:0 0 24px rgba(255,90,0,0.65);
+        text-transform:uppercase;
+      ">RESTART</button>
+      <div style="font-size:11px;color:#965;letter-spacing:1px">Space / Enter also works</div>
     </div>
   `;
   ui.style.display = 'flex';
-  setTimeout(() => { ui.style.display = 'none'; }, 2800);
 }
 
 // ── SDK HOOKS ─────────────────────────────────────────────────────────────
