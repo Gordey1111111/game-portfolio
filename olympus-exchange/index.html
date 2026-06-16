@@ -5,6 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Olympus Exchange</title>
   <script src="https://cdn.jsdelivr.net/npm/@remix-gg/sdk@latest/dist/index.min.js"></script>
+  <script>
+    window.RemixSDK = window.RemixSDK || {};
+    window.RemixSDK.ready = window.RemixSDK.ready || (async function() {});
+    window.RemixSDK.onPlayAgain = window.RemixSDK.onPlayAgain || function() {};
+    window.RemixSDK.onToggleMute = window.RemixSDK.onToggleMute || function() {};
+    window.RemixSDK.hapticFeedback = window.RemixSDK.hapticFeedback || function() {};
+    window.RemixSDK.singlePlayer = window.RemixSDK.singlePlayer || {
+      actions: { gameOver: function() {} }
+    };
+    function waitForRemixReady(timeoutMs) {
+      return Promise.race([
+        Promise.resolve().then(function() { return window.RemixSDK.ready(); }),
+        new Promise(function(resolve) { setTimeout(resolve, timeoutMs); })
+      ]).catch(function() {});
+    }
+  </script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Cinzel+Decorative:wght@400;700;900&family=IM+Fell+English:ital@0;1&display=swap');
 
@@ -23,7 +39,9 @@
     /* ═══════════════ SPLASH ═══════════════ */
     #splash {
       position: absolute; inset: 0; z-index: 300;
-      background: #0c0900;
+      background:
+        radial-gradient(circle at 50% 32%, rgba(201,162,39,0.18), transparent 34%),
+        linear-gradient(180deg, #1a1204 0%, #0c0900 55%, #050400 100%);
       overflow: hidden;
     }
     #splash-video {
@@ -38,7 +56,7 @@
     }
     #splash .sp-title-frame,
     #splash .sp-loader-frame {
-      opacity: 0;
+      opacity: 1;
       transition: opacity 0.35s ease;
     }
     #splash.video-ready .sp-title-frame,
@@ -1434,7 +1452,7 @@
 
 <script>
 (async () => {
-  await window.RemixSDK.ready();
+  await waitForRemixReady(1200);
 
   // SDK Integration
   window.RemixSDK.onPlayAgain(() => {
@@ -1593,7 +1611,7 @@
   (async () => {
     try {
       await new Promise(r => setTimeout(r, 800));
-      await window.RemixSDK.ready();
+      await waitForRemixReady(1200);
     } catch(e) {}
   })();
 
@@ -2665,7 +2683,7 @@
     
     playClick();
     safeHaptic();
-    window.RemixSDK.hapticFeedback(); // SDK haptic feedback
+    safeHaptic(); // SDK haptic feedback
     hideSignalPopup(true);
     const popup = document.getElementById('signal-popup');
     if (selectedBroker === 1) {
@@ -2717,7 +2735,7 @@
       addLeaderEntry(true);
       playWinMusic();
       safeHaptic();
-      window.RemixSDK.hapticFeedback();
+      safeHaptic();
     } else {
       lives = Math.max(0, lives - livesLost);
       playLose();
@@ -2725,7 +2743,7 @@
       shakeChart();
       addLeaderEntry(false);
       safeHaptic();
-      window.RemixSDK.hapticFeedback();
+      safeHaptic();
     }
     updateHUD(); showResult(won,pts,lives,livesLost);
   }
