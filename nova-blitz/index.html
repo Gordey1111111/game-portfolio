@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nova Blitz</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; overflow:hidden; }
+#gc {
+  position: fixed;
+  top: 0; left: 50%;
+  transform: translateX(-50%);
+  display: block;
+  touch-action: none;
+}
+#ui {
+  position: fixed;
+  top: 0; left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<div id="ui"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@remix-gg/sdk@latest/dist/index.min.js"></script>
+<script>
+'use strict';
+
+// ── SDK ───────────────────────────────────────────────────────────────────
+function getSDK() { return window.FarcadeSDK || window.RemixSDK; }
+function haptic() { try { window.RemixSDK.hapticFeedback(); } catch(e) {} }
+
+// ── CANVAS ────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gc');
+const ctx    = canvas.getContext('2d');
+const ui     = document.getElementById('ui');
+
+const VW = 360, VH = 640;
+let CW = VW, CH = VH, DPR = 1, SCALE = 1, HSCALE = 1;
+
+function resize() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const maxW = window.matchMedia('(orientation:landscape)').matches ? 400 : vw;
+  SCALE  = Math.min(vw / VW, vh / VH, maxW / VW);
+  CW     = Math.round(VW * SCALE);
+  CH     = Math.round(vh);
+  HSCALE = CH / VH;
+  DPR    = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width  = CW * DPR;
+  canvas.height = CH * DPR;
+  canvas.style.width  = CW + 'px';
+  canvas.style.height = CH + 'px';
+  ui.style.width  = CW + 'px';
+  ui.style.height = CH + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── INPUT ─────────────────────────────────────────────────────────────────
+const K = {};
+window.addEventListener('keydown', e => {
+  K[e.code] = true;
+  if ((e.code === 'Space' || e.code === 'Enter') && STATE === 'menu') doStart();
+});
+window.addEventListener('keyup', e => { K[e.code] = false; });
+
+let touchX = null;
+canvas.addEventListener('touchstart', e => { e.preventDefault(); touchX = e.touches[0].clientX; }, { passive: false });
+canvas.addEventListener('touchmove',  e => { e.preventDefault(); touchX = e.touches[0].clientX; }, { passive: false });
+canvas.addEventListener('touchend',   e => { e.preventDefault(); touchX = null; }, { passive: false });
+
+// ── GAME STATE ────────────────────────────────────────────────────────────
+let STATE = 'menu'; // menu | running | dead
+let score, lives, px, tick;
+let bulletCD, rockCD, gemCD, powerCD;
+let BULLETS = [], ROCKS = [], GEMS = [], PARTS = [], POWERS = [];
+let shieldTimer = 0, rapidTimer = 0;
+
+// ── STARFIELD ─────────────────────────────────────────────────────────────
+const STARS = [];
+for (let i = 0; i < 130; i++) {
+  STARS.push({
+    x: Math.random() * VW,
+    y: Math.random() * VH,
+    r: Math.random() * 1.6 + 0.2,
+    spd: Math.random() * 50 + 8,
+    a: Math.random() * 0.6 + 0.2
+  });
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+function gameSpeed() { return 1 + Math.min(tick * 0.025, 5); }
+
+function burst(x, y, col, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = 40 + Math.random() * 130;
+    PARTS.push({ x, y, vx: Math.cos(a)*v, vy: Math.sin(a)*v,
+      life: 1, dec: 0.7 + Math.random()*0.9, r: 2 + Math.random()*4, col });
+  }
+}
+
+function ring(x, y, col) {
+  PARTS.push({ x, y, ring: true, r: 4, maxR: 55, life: 1, dec: 1.8, col });
+}
+
+// ── GAME CONTROL ──────────────────────────────────────────────────────────
+function doStart() {
+  score = 0; lives = 3; tick = 0; px = VW / 2;
+  bulletCD = 0; rockCD = 0.5; gemCD = 4; powerCD = 12;
+  shieldTimer = 0; rapidTimer = 0;
+  BULLETS.length = 0; ROCKS.length = 0; GEMS.length = 0;
+  PARTS.length = 0; POWERS.length = 0;
+  ui.style.display = 'none';
+  STATE = 'running';
+}
+window.doStart = doStart;
+
+function doDie() {
+  STATE = 'dead';
+  haptic();
+  burst(px, VH - 68, '#ff4400', 28);
+  burst(px, VH - 68, '#ffaa00', 18);
+  ring(px, VH - 68, '#ff6600');
+
+  const s = getSDK();
+  try { s.singlePlayer.actions.gameOver({ score: Math.floor(score) }); } catch(e) {}
+
+  ui.innerHTML = `
+    <div style="
+      background:rgba(0,4,18,0.96);
+      border:2px solid #f50;
+      border-radius:18px;
+      padding:30px 36px;
+      display:flex;flex-direction:column;align-items:center;gap:14px;
+      box-shadow:0 0 50px rgba(255,80,0,0.35),0 0 100px rgba(255,40,0,0.15);
+      font-family:monospace;
+    ">
+      <div style="font-size:11px;letter-spacing:5px;color:#f84;text-transform:uppercase">SHIP DESTROYED</div>
+      <div style="font-size:56px;font-weight:900;color:#fff;text-shadow:0 0 20px #f60;line-height:1">${Math.floor(score)}</div>
+      <div style="font-size:11px;color:#888;letter-spacing:2px">POINTS</div>
+      <div style="width:160px;height:1px;background:linear-gradient(to right,transparent,#f60,transparent)"></div>
+      <div style="font-size:12px;color:#fa8">Challenge your friend to beat this!</div>
+    </div>
+  `;
+  ui.style.display = 'flex';
+  setTimeout(() => { ui.style.display = 'none'; }, 2800);
+}
+
+// ── SDK HOOKS ─────────────────────────────────────────────────────────────
+const SDK0 = getSDK();
+if (SDK0?.onPlayAgain)  SDK0.onPlayAgain(() => doStart());
+if (SDK0?.onToggleMute) SDK0.onToggleMute(() => {});
+
+// ── MENU ─────────────────────────────────────────────────────────────────
+function showMenu() {
+  ui.innerHTML = `
+    <div style="
+      background:rgba(0,4,18,0.95);
+      border:2px solid #0af;
+      border-radius:18px;
+      padding:36px 32px 30px;
+      display:flex;flex-direction:column;align-items:center;gap:18px;
+      box-shadow:0 0 50px rgba(0,180,255,0.3),0 0 100px rgba(0,100,200,0.15);
+      font-family:monospace;
+    ">
+      <div style="
+        font-size:52px;font-weight:900;color:#fff;
+        text-shadow:0 0 20px #0af,0 0 50px #08f;
+        letter-spacing:-1px;line-height:1.05;text-align:center;
+      ">NOVA<br><span style="color:#0af;font-size:44px">BLITZ</span></div>
+      <div style="width:220px;height:1px;background:linear-gradient(to right,transparent,#0af,transparent)"></div>
+      <div style="font-size:12px;color:#7cf;text-align:center;line-height:1.8">
+        Dodge asteroids · Collect gems<br>
+        Grab power-ups · Beat your friends!
+      </div>
+      <button onclick="doStart()" style="
+        pointer-events:all;
+        width:210px;padding:17px 0;
+        background:linear-gradient(180deg,#0be 0%,#058 100%);
+        border:none;border-radius:10px;color:#fff;
+        font-size:19px;font-weight:900;font-family:monospace;
+        letter-spacing:3px;cursor:pointer;
+        box-shadow:0 0 24px rgba(0,190,255,0.7);
+        text-transform:uppercase;transition:transform .1s;
+      " onmousedown="this.style.transform='scale(.96)'" onmouseup="this.style.transform=''">
+        ▶ LAUNCH
+      </button>
+      <div style="font-size:11px;color:#468;letter-spacing:1px">← → keys or tap screen edges</div>
+    </div>
+  `;
+  ui.style.display = 'flex';
+}
+
+// ── DRAW BG ───────────────────────────────────────────────────────────────
+function drawBG(dt) {
+  ctx.fillStyle = '#000510';
+  ctx.fillRect(0, 0, VW, VH);
+
+  // nebula
+  let n = ctx.createRadialGradient(90, 160, 0, 90, 160, 200);
+  n.addColorStop(0, 'rgba(0,25,70,0.18)'); n.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = n; ctx.fillRect(0, 0, VW, VH);
+  n = ctx.createRadialGradient(280, 480, 0, 280, 480, 180);
+  n.addColorStop(0, 'rgba(35,0,55,0.14)'); n.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = n; ctx.fillRect(0, 0, VW, VH);
+
+  const spd = gameSpeed();
+  for (const s of STARS) {
+    s.y += s.spd * spd * dt;
+    if (s.y > VH + 2) { s.y = -2; s.x = Math.random() * VW; }
+    ctx.globalAlpha = s.a;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── DRAW SHIP ─────────────────────────────────────────────────────────────
+function drawShip(x, y, t, shielded, rapid) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  // engine glow
+  let eg = ctx.createRadialGradient(0, 18, 0, 0, 28, 38);
+  const ePow = rapid ? '#ff8800' : '#00ccff';
+  eg.addColorStop(0, `rgba(${rapid ? '255,140,0' : '0,200,255'},${0.55 + Math.sin(t * 20) * 0.18})`);
+  eg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = eg; ctx.fillRect(-38, 8, 76, 58);
+
+  // exhaust flame
+  const fl = Math.sin(t * 22) * 3;
+  ctx.fillStyle = rapid ? `rgba(255,150,0,0.9)` : `rgba(0,200,255,0.85)`;
+  ctx.beginPath();
+  ctx.moveTo(-7, 16); ctx.lineTo(7, 16);
+  ctx.lineTo(3 + fl, 40); ctx.lineTo(-3 - fl, 40);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = rapid ? 'rgba(255,230,80,0.8)' : 'rgba(160,240,255,0.8)';
+  ctx.beginPath();
+  ctx.moveTo(-3, 16); ctx.lineTo(3, 16);
+  ctx.lineTo(1, 30); ctx.lineTo(-1, 30);
+  ctx.closePath(); ctx.fill();
+
+  // wings
+  ctx.fillStyle = rapid ? '#804010' : '#1a5080';
+  ctx.beginPath(); ctx.moveTo(-12, 2); ctx.lineTo(-32, 16); ctx.lineTo(-26, 20); ctx.lineTo(-10, 10); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo( 12, 2); ctx.lineTo( 32, 16); ctx.lineTo( 26, 20); ctx.lineTo( 10, 10); ctx.closePath(); ctx.fill();
+
+  // wing accent
+  ctx.fillStyle = rapid ? '#ff9030' : '#2090d0';
+  ctx.beginPath(); ctx.moveTo(-14, 4); ctx.lineTo(-28, 14); ctx.lineTo(-22, 16); ctx.lineTo(-12, 8); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo( 14, 4); ctx.lineTo( 28, 14); ctx.lineTo( 22, 16); ctx.lineTo( 12, 8); ctx.closePath(); ctx.fill();
+
+  // body
+  const bg = ctx.createLinearGradient(-17, -28, 17, 22);
+  if (rapid) {
+    bg.addColorStop(0, '#ffc080'); bg.addColorStop(0.4, '#c06020'); bg.addColorStop(1, '#401000');
+  } else {
+    bg.addColorStop(0, '#90d0f8'); bg.addColorStop(0.4, '#3080c0'); bg.addColorStop(1, '#0a2840');
+  }
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.moveTo(0, -30);
+  ctx.bezierCurveTo(7, -20, 17, -8, 17, 8);
+  ctx.bezierCurveTo(17, 17, 11, 22, 7, 22);
+  ctx.lineTo(0, 17); ctx.lineTo(-7, 22);
+  ctx.bezierCurveTo(-11, 22, -17, 17, -17, 8);
+  ctx.bezierCurveTo(-17, -8, -7, -20, 0, -30);
+  ctx.closePath(); ctx.fill();
+
+  // cockpit
+  const cg = ctx.createRadialGradient(-4, -16, 1, 0, -12, 10);
+  cg.addColorStop(0, 'rgba(200,240,255,0.95)');
+  cg.addColorStop(1, rapid ? 'rgba(180,100,0,0.7)' : 'rgba(0,120,200,0.65)');
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.ellipse(0, -12, 7, 11, 0, 0, Math.PI * 2); ctx.fill();
+
+  // highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  ctx.beginPath(); ctx.ellipse(-5, -20, 3, 8, -0.3, 0, Math.PI * 2); ctx.fill();
+
+  // SHIELD ring
+  if (shielded) {
+    const sr = 28;
+    ctx.shadowColor = '#00ffcc'; ctx.shadowBlur = 14;
+    ctx.strokeStyle = `rgba(0,255,200,${0.55 + Math.sin(t*8)*0.35})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, -4, sr, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = `rgba(0,255,200,${0.2 + Math.sin(t*8)*0.15})`;
+    ctx.beginPath(); ctx.arc(0, -4, sr + 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.restore();
+}
+
+// ── DRAW BULLET ───────────────────────────────────────────────────────────
+function drawBullet(b) {
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  const col = b.rapid ? '#ff8800' : '#00ddff';
+  const glow = ctx.createLinearGradient(0, -b.h / 2, 0, b.h / 2);
+  glow.addColorStop(0, '#fff');
+  glow.addColorStop(0.2, col);
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(-2, -b.h / 2, 4, b.h);
+  ctx.shadowColor = col; ctx.shadowBlur = 9;
+  ctx.fillStyle = col;
+  ctx.fillRect(-1.5, -b.h / 2, 3, b.h / 3);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ── ROCK GENERATION ───────────────────────────────────────────────────────
+function makeRock() {
+  const spd = gameSpeed();
+  const size = Math.random();
+  const r = size < 0.45 ? 10 + Math.random() * 10 : size < 0.8 ? 18 + Math.random() * 12 : 28 + Math.random() * 14;
+  const n = 7 + Math.floor(Math.random() * 5);
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const d = r * (0.65 + Math.random() * 0.55);
+    pts.push([Math.cos(a) * d, Math.sin(a) * d]);
+  }
+  return {
+    x: r + Math.random() * (VW - r * 2),
+    y: -r - 10,
+    r, pts,
+    vy: (70 + Math.random() * 55) * Math.min(spd, 3.5),
+    vx: (Math.random() - 0.5) * 45,
+    rot: Math.random() * Math.PI * 2,
+    rotV: (Math.random() - 0.5) * 2.2,
+    hot: Math.random() < 0.22,
+    hp: r > 32 ? 4 : r > 22 ? 2 : 1,
+    maxHp: r > 32 ? 4 : r > 22 ? 2 : 1
+  };
+}
+
+// ── DRAW ROCK ─────────────────────────────────────────────────────────────
+function drawRock(a) {
+  ctx.save();
+  ctx.translate(a.x, a.y);
+  ctx.rotate(a.rot);
+
+  if (a.hot) {
+    const hg = ctx.createRadialGradient(0, 0, a.r * 0.4, 0, 0, a.r * 1.6);
+    hg.addColorStop(0, 'rgba(255,100,0,0.28)');
+    hg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = hg; ctx.fillRect(-a.r * 1.7, -a.r * 1.7, a.r * 3.4, a.r * 3.4);
+  }
+
+  const rg = ctx.createRadialGradient(-a.r * 0.28, -a.r * 0.28, 1, 0, 0, a.r);
+  if (a.hot) {
+    rg.addColorStop(0, '#c05822'); rg.addColorStop(0.55, '#7a3210'); rg.addColorStop(1, '#2c0800');
+  } else {
+    rg.addColorStop(0, '#8a8a9a'); rg.addColorStop(0.55, '#555565'); rg.addColorStop(1, '#1e1e28');
+  }
+  ctx.fillStyle = rg;
+  ctx.beginPath();
+  a.pts.forEach(([px2, py2], i) => i === 0 ? ctx.moveTo(px2, py2) : ctx.lineTo(px2, py2));
+  ctx.closePath(); ctx.fill();
+
+  // damage cracks
+  if (a.hp < a.maxHp) {
+    ctx.strokeStyle = 'rgba(255,180,60,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(a.r * 0.1, -a.r * 0.4); ctx.lineTo(-a.r * 0.15, a.r * 0.3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-a.r * 0.3, -a.r * 0.2); ctx.lineTo(a.r * 0.25, a.r * 0.1); ctx.stroke();
+  }
+
+  // crater
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.beginPath(); ctx.arc(a.r * 0.22, -a.r * 0.22, a.r * 0.26, 0, Math.PI * 2); ctx.fill();
+  // highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.beginPath(); ctx.ellipse(-a.r * 0.28, -a.r * 0.32, a.r * 0.18, a.r * 0.13, -0.4, 0, Math.PI * 2); ctx.fill();
+
+  ctx.restore();
+}
+
+// ── DRAW GEM ──────────────────────────────────────────────────────────────
+function drawGem(g, t) {
+  ctx.save();
+  ctx.translate(g.x, g.y);
+  const pulse = 0.6 + 0.4 * Math.sin(t * 4 + g.phase);
+  ctx.rotate(Math.sin(t * 1.5 + g.phase) * 0.25);
+
+  const gg = ctx.createRadialGradient(0, 0, 0, 0, 0, 18);
+  gg.addColorStop(0, `rgba(255,220,30,${pulse * 0.55})`);
+  gg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gg; ctx.fillRect(-18, -18, 36, 36);
+
+  ctx.shadowColor = '#ffe000'; ctx.shadowBlur = 12;
+  ctx.fillStyle = `rgba(255,235,40,${pulse})`;
+  // diamond shape
+  ctx.beginPath();
+  ctx.moveTo(0, -11); ctx.lineTo(9, 0); ctx.lineTo(0, 13); ctx.lineTo(-9, 0);
+  ctx.closePath(); ctx.fill();
+  // inner facets
+  ctx.fillStyle = 'rgba(255,255,200,0.6)';
+  ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(9, 0); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ── DRAW POWER-UP ─────────────────────────────────────────────────────────
+function drawPowerUp(p, t) {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  const pulse = 0.6 + 0.4 * Math.sin(t * 6 + p.phase);
+  const col = p.type === 'shield' ? '#00ffcc' : '#ff8800';
+
+  const pg = ctx.createRadialGradient(0, 0, 0, 0, 0, 20);
+  pg.addColorStop(0, `${col}${Math.round(pulse * 80).toString(16).padStart(2,'0')}`);
+  pg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = pg; ctx.fillRect(-20, -20, 40, 40);
+
+  ctx.shadowColor = col; ctx.shadowBlur = 14;
+  ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.stroke();
+
+  ctx.fillStyle = col;
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(p.type === 'shield' ? '⬡' : '⚡', 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ── HUD ───────────────────────────────────────────────────────────────────
+function drawHUD(t) {
+  const spd = gameSpeed();
+
+  // top bar bg
+  const hg = ctx.createLinearGradient(0, 0, 0, 40);
+  hg.addColorStop(0, 'rgba(0,5,18,0.88)');
+  hg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = hg; ctx.fillRect(0, 0, VW, 40);
+
+  // score
+  ctx.shadowColor = '#0af'; ctx.shadowBlur = 10;
+  ctx.fillStyle = '#0df'; ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('⭐ ' + Math.floor(score), 10, 8);
+
+  // wave
+  ctx.textAlign = 'center';
+  ctx.fillStyle = `rgba(0,200,255,${0.45 + Math.sin(t * 3) * 0.2})`;
+  ctx.font = '11px monospace';
+  ctx.fillText('WAVE ' + Math.floor(spd), VW / 2, 10);
+
+  // lives
+  ctx.textAlign = 'right';
+  ctx.shadowColor = '#f55'; ctx.shadowBlur = 8;
+  ctx.fillStyle = '#f88'; ctx.font = 'bold 15px monospace';
+  ctx.fillText('♥ '.repeat(lives).trim(), VW - 10, 8);
+  ctx.shadowBlur = 0;
+
+  // power-up timers
+  if (shieldTimer > 0) {
+    ctx.fillStyle = 'rgba(0,255,200,0.85)'; ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`⬡ ${shieldTimer.toFixed(1)}s`, 10, 28);
+  }
+  if (rapidTimer > 0) {
+    ctx.fillStyle = 'rgba(255,140,0,0.85)'; ctx.font = 'bold 11px monospace';
+    ctx.textAlign = shieldTimer > 0 ? 'center' : 'left';
+    ctx.fillText(`⚡ ${rapidTimer.toFixed(1)}s`, shieldTimer > 0 ? VW / 2 : 10, 28);
+  }
+}
+
+// ── MAIN LOOP ─────────────────────────────────────────────────────────────
+let prevT = 0;
+
+function loop(ts) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((ts - prevT) / 1000, 0.05);
+  prevT = ts;
+  const t = ts / 1000;
+
+  ctx.setTransform(SCALE * DPR, 0, 0, HSCALE * DPR, 0, 0);
+  ctx.clearRect(0, 0, VW, VH);
+
+  drawBG(dt);
+
+  // ── MENU / DEAD ─────────────────────────────────────────────────────────
+  if (STATE !== 'running') {
+    drawShip(VW / 2, VH - 68, t, false, false);
+    for (const r of ROCKS) {
+      r.y += r.vy * dt * 0.3;
+      r.rot += r.rotV * dt;
+      if (r.y < VH + 60) drawRock(r);
+    }
+    return;
+  }
+
+  // ── RUNNING ─────────────────────────────────────────────────────────────
+  tick += dt;
+  score += dt * 6;
+  const spd = gameSpeed();
+
+  // timers
+  if (shieldTimer > 0) shieldTimer -= dt;
+  if (rapidTimer  > 0) rapidTimer  -= dt;
+
+  // input
+  let dir = 0;
+  if (K['ArrowLeft'] || K['KeyA']) dir = -1;
+  if (K['ArrowRight'] || K['KeyD']) dir = 1;
+  if (touchX !== null) {
+    const rect = canvas.getBoundingClientRect();
+    const rx = (touchX - rect.left) / CW;
+    dir = rx < 0.4 ? -1 : rx > 0.6 ? 1 : 0;
+  }
+  px = Math.max(20, Math.min(VW - 20, px + dir * 295 * dt));
+
+  const shipY = VH - 68;
+
+  // ── BULLETS ─────────────────────────────────────────────────────────────
+  bulletCD -= dt;
+  const fireRate = rapidTimer > 0 ? 0.09 : 0.2;
+  if (bulletCD <= 0) {
+    if (rapidTimer > 0) {
+      BULLETS.push({ x: px - 9, y: shipY - 15, vy: -580, h: 20, rapid: true });
+      BULLETS.push({ x: px + 9, y: shipY - 15, vy: -580, h: 20, rapid: true });
+    } else {
+      BULLETS.push({ x: px, y: shipY - 18, vy: -540, h: 22, rapid: false });
+    }
+    bulletCD = fireRate;
+  }
+
+  for (let i = BULLETS.length - 1; i >= 0; i--) {
+    const b = BULLETS[i];
+    b.y += b.vy * dt;
+    if (b.y < -25) { BULLETS.splice(i, 1); continue; }
+    drawBullet(b);
+  }
+
+  // ── ROCKS ───────────────────────────────────────────────────────────────
+  rockCD -= dt;
+  if (rockCD <= 0) {
+    ROCKS.push(makeRock());
+    if (spd > 2 && Math.random() < 0.35) ROCKS.push(makeRock());
+    if (spd > 4 && Math.random() < 0.25) ROCKS.push(makeRock());
+    rockCD = Math.max(0.22, 0.75 - tick * 0.003);
+  }
+
+  for (let i = ROCKS.length - 1; i >= 0; i--) {
+    const a = ROCKS[i];
+    a.x += a.vx * dt; a.y += a.vy * dt; a.rot += a.rotV * dt;
+    if (a.y > VH + a.r + 15) { ROCKS.splice(i, 1); continue; }
+
+    // bullet hit
+    let destroyed = false;
+    for (let j = BULLETS.length - 1; j >= 0; j--) {
+      const b = BULLETS[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      if (dx * dx + dy * dy < a.r * a.r) {
+        BULLETS.splice(j, 1);
+        a.hp--;
+        burst(b.x, b.y, a.hot ? '#ff9040' : '#99aabb', 6);
+        if (a.hp <= 0) {
+          burst(a.x, a.y, a.hot ? '#ff6020' : '#9aabb0', 14);
+          ring(a.x, a.y, a.hot ? '#ff8040' : '#8899aa');
+          score += a.r > 32 ? 40 : a.r > 22 ? 20 : 10;
+          haptic();
+          ROCKS.splice(i, 1);
+          destroyed = true;
+        }
+        break;
+      }
+    }
+    if (destroyed) continue;
+
+    // player hit
+    const dx2 = px - a.x, dy2 = shipY - a.y;
+    if (dx2 * dx2 + dy2 * dy2 < (a.r + 17) * (a.r + 17)) {
+      if (shieldTimer > 0) {
+        burst(a.x, a.y, '#00ffcc', 12);
+        ring(a.x, a.y, '#00ffcc');
+        ROCKS.splice(i, 1);
+        continue;
+      }
+      burst(a.x, a.y, '#ff4400', 16);
+      ring(a.x, a.y, '#ff6600');
+      ROCKS.splice(i, 1);
+      lives--;
+      haptic();
+      if (lives <= 0) { doDie(); return; }
+      continue;
+    }
+
+    drawRock(a);
+  }
+
+  // ── GEMS ────────────────────────────────────────────────────────────────
+  gemCD -= dt;
+  if (gemCD <= 0) {
+    GEMS.push({
+      x: 30 + Math.random() * (VW - 60),
+      y: -15,
+      vy: 55 + Math.random() * 40,
+      phase: Math.random() * Math.PI * 2
+    });
+    gemCD = 2.2 + Math.random() * 2;
+  }
+
+  for (let i = GEMS.length - 1; i >= 0; i--) {
+    const g = GEMS[i];
+    g.y += g.vy * dt;
+    if (g.y > VH + 20) { GEMS.splice(i, 1); continue; }
+    const dx = px - g.x, dy = shipY - g.y;
+    if (dx * dx + dy * dy < 32 * 32) {
+      burst(g.x, g.y, '#ffe040', 10);
+      score += 60;
+      haptic();
+      GEMS.splice(i, 1);
+      continue;
+    }
+    drawGem(g, t);
+  }
+
+  // ── POWER-UPS ───────────────────────────────────────────────────────────
+  powerCD -= dt;
+  if (powerCD <= 0) {
+    POWERS.push({
+      x: 40 + Math.random() * (VW - 80),
+      y: -18,
+      vy: 45 + Math.random() * 30,
+      type: Math.random() < 0.5 ? 'shield' : 'rapid',
+      phase: Math.random() * Math.PI * 2
+    });
+    powerCD = 8 + Math.random() * 6;
+  }
+
+  for (let i = POWERS.length - 1; i >= 0; i--) {
+    const p = POWERS[i];
+    p.y += p.vy * dt;
+    if (p.y > VH + 22) { POWERS.splice(i, 1); continue; }
+    const dx = px - p.x, dy = shipY - p.y;
+    if (dx * dx + dy * dy < 30 * 30) {
+      if (p.type === 'shield') { shieldTimer = 6; }
+      else { rapidTimer = 5; }
+      burst(p.x, p.y, p.type === 'shield' ? '#00ffcc' : '#ff8800', 14);
+      ring(p.x, p.y, p.type === 'shield' ? '#00ffcc' : '#ff8800');
+      haptic();
+      POWERS.splice(i, 1);
+      continue;
+    }
+    drawPowerUp(p, t);
+  }
+
+  // ── SHIP ────────────────────────────────────────────────────────────────
+  drawShip(px, shipY, t, shieldTimer > 0, rapidTimer > 0);
+
+  // ── PARTICLES ───────────────────────────────────────────────────────────
+  for (let i = PARTS.length - 1; i >= 0; i--) {
+    const p = PARTS[i];
+    p.life -= p.dec * dt;
+    if (p.life <= 0) { PARTS.splice(i, 1); continue; }
+
+    if (p.ring) {
+      p.r = p.r + (p.maxR - p.r) * dt * 4;
+      ctx.globalAlpha = Math.max(0, p.life * 0.7);
+      ctx.strokeStyle = p.col; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.stroke();
+    } else {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 220 * dt;
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // ── HUD ─────────────────────────────────────────────────────────────────
+  drawHUD(t);
+}
+
+// ── INIT ─────────────────────────────────────────────────────────────────
+// pre-populate menu asteroids
+for (let i = 0; i < 5; i++) {
+  const r = makeRock();
+  r.y = Math.random() * VH;
+  ROCKS.push(r);
+}
+
+showMenu();
+requestAnimationFrame(loop);
+
+setTimeout(() => {
+  const s = getSDK();
+  if (s?.ready) s.ready().catch(() => {});
+}, 0);
+</script>
+</body>
+</html>
