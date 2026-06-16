@@ -6,6 +6,26 @@
   <title>Driver Infinity</title>
   <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/@remix-gg/sdk@latest/dist/index.min.js"></script>
+  <script>
+    window.RemixSDK = window.RemixSDK || {};
+    window.RemixSDK.ready = window.RemixSDK.ready || (async function() {});
+    window.RemixSDK.onPlayAgain = window.RemixSDK.onPlayAgain || function() {};
+    window.RemixSDK.onToggleMute = window.RemixSDK.onToggleMute || function() {};
+    window.RemixSDK.hapticFeedback = window.RemixSDK.hapticFeedback || function() {};
+    window.RemixSDK.singlePlayer = window.RemixSDK.singlePlayer || {
+      actions: {
+        gameOver: function() {},
+        saveGameState: function() {}
+      }
+    };
+    function waitForSDKReady(sdk, timeoutMs) {
+      if (!sdk || !sdk.ready) return Promise.resolve();
+      return Promise.race([
+        Promise.resolve().then(function() { return sdk.ready(); }),
+        new Promise(function(resolve) { setTimeout(resolve, timeoutMs); })
+      ]).catch(function() {});
+    }
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; }
@@ -193,13 +213,7 @@ document.addEventListener('click', () => helpPanel.classList.remove('visible'));
 async function initGame() {
 const sdk = window.FarcadeSDK || window.RemixSDK;
 let isMuted = false;
-if (sdk && sdk.ready) {
-  try {
-    await sdk.ready();
-  } catch (e) {
-    console.warn('SDK ready failed', e);
-  }
-}
+await waitForSDKReady(sdk, 1200);
 if (sdk && sdk.onToggleMute) {
   sdk.onToggleMute(({ isMuted: muted }) => {
     isMuted = !!muted;
