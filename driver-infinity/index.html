@@ -542,6 +542,8 @@ resize();
 function onDown(e) {
   const t = e.touches ? e.touches[0] : e;
   if (state === 'continue_offer') {
+    finalizeGameOver();
+    return;
     const target = e.target;
     if (target && target.closest && target.closest('#continue-buy-btn')) {
       const buyBtn = document.getElementById('continue-buy-btn');
@@ -772,19 +774,6 @@ function finalizeGameOver() {
 }
 
 function maybeShowContinueOffer() {
-  const balance = getConsumableBalance(CONTINUE_ITEM_SLUG, CONTINUE_SPENT_KEY);
-  if (!hasUsedContinueThisRun && balance > 0) {
-    consumeContinueItem();
-    hasUsedContinueThisRun = true;
-    resumeFromContinue();
-    return true;
-  }
-
-  if (!hasUsedContinueThisRun) {
-    showContinueOffer();
-    return true;
-  }
-
   finalizeGameOver();
   return true;
 }
